@@ -1,0 +1,29 @@
+{
+ "A": [
+  [
+   1.2380943013714052,
+   0.038928372641635886
+  ],
+  [
+   -0.017127525463527898,
+   1.3340993783286759
+  ]
+ ],
+ "uv_center": [
+  320,
+  240
+ ],
+ "img_center": [
+  600.0,
+  800.0
+ ],
+ "parallax_dir": [
+  -0.23471426608798746,
+  0.9720644079971128
+ ],
+ "parallax_px_cm": 15061.052631578948,
+ "f_px_1600": 1075.7894736842106,
+ "baseline_cm": 14.0,
+ "working_long_side": 1600,
+ "note": "footprint centre = img_center + parallax_dir * parallax_px_cm / Z_cm; A from the map homography"
+}

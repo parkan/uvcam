@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# launcher: uv camera -> v4l2loopback. edit ORIENT for how the camera is mounted.
+# transpose 1 = 90 cw, 2 = 90 ccw; the sensor is rotated so one of these + --hflip is upright.
+ORIENT="--transpose 2 --hflip"
+exec uvx --from pyusb python "$(dirname "$(readlink -f "$0")")/uvcam_bridge.py" $ORIENT "$@"

@@ -1,0 +1,2 @@
+# geek szitman "supercamera" (usee plus protocol) uv camera, vendor-specific bulk interfaces, needs raw usb access
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2ce3", ATTRS{idProduct}=="3828", MODE="0666"
