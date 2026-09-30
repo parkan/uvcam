@@ -58,6 +58,22 @@ import kotlin.concurrent.thread
 /** Which full-screen destination is showing. */
 enum class Screen { Live, Settings, Trust }
 
+private const val SENTRY_TAG = "UVCam"
+private const val SENTRY_BATTERY_FLOOR = 15
+private const val SENTRY_COOLDOWN_NANOS = 30_000_000_000L
+private const val SENTRY_BUDGET_MS = 30L * 60 * 1000
+
+/** The only state in which an external trigger may start a recording. Counters are per arming. */
+data class Sentry(
+    val armedAtNanos: Long,
+    val untilNanos: Long,
+    val accepted: Int = 0,
+    val refused: Int = 0,
+    val recordedMs: Long = 0,
+    val lastStopNanos: Long = 0,
+    val lastEvent: String = "waiting",
+)
+
 /**
  * Where a cable-button event (a snapshot, or a double-press record toggle) leaves the user.
  *
@@ -97,6 +113,8 @@ data class UiState(
     /** A recording start is in flight (MediaStore + encoder setup); the Record button shows a
      * spinner and refuses further taps until it clears, either way. */
     val recordingStarting: Boolean = false,
+    /** Armed ("sentry") state, or null. Never persisted: a reboot or a relaunch always comes up disarmed. */
+    val sentry: Sentry? = null,
     /** [System.nanoTime] of the moment the recorder was published, or null when not recording. */
     val recordingStartedAtNanos: Long? = null,
     /** A small thumbnail of the last saved photo, held for three seconds so the screen can confirm
@@ -372,7 +390,7 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
                 val streaming = s.connection is ConnectionState.Streaming
                 // Anything but Streaming means the last frame is stale (unplug, error, reconnect):
                 // drop it so the view falls back to its status text instead of a frozen picture.
-                if (!streaming) { lastImage = null; lastFrame = null }
+                if (!streaming) { lastImage = null; lastFrame = null; if (_ui.value.sentry != null) disarm("scope not streaming") }
                 _ui.update {
                     it.copy(
                         session = s,

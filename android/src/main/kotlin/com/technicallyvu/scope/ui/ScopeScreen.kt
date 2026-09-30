@@ -141,6 +141,7 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
             // Compose skip the whole settings subtree while frames keep arriving behind it.
             val settings by vm.settings.collectAsState()
             SettingsScreen(
+                onArm = remember(vm) { { m: Int -> vm.arm(m) } },
                 settings = settings,
                 onChange = remember(vm) { vm::updateSettings },
                 onBack = onBack,
@@ -321,6 +322,8 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
         }
 
         ShutterFlash(flashAlpha)
+    }
+    ui.sentry?.let { SentryOverlay(it, ui.recordingStartedAtNanos != null, onDisarm = remember(vm) { { vm.disarm("user") } }) }
     }
 }
 

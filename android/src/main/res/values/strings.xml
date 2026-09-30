@@ -143,4 +143,11 @@
     <string name="about_attributions_title">Attributions</string>
     <string name="about_attribution_detail_format">%1$s — %2$s</string>
     <string name="about_license_title">License</string>
+    <string name="settings_group_sentry">Sentry (external trigger)</string>
+    <string name="settings_sentry_help">While armed, an intent id.corvid.uvcam.START_RECORDING (extra duration, seconds) or STOP_RECORDING from another app starts or stops a recording. Arming only happens here, expires on its own, and ends when the scope is unplugged or the battery is low. Triggers while disarmed are ignored.</string>
+    <string name="settings_arm_format">Arm %1$d min</string>
+    <string name="settings_pair_audio_label">Record phone audio into the paired video</string>
+    <string name="settings_pair_audio_help">Uses the phone microphone, or a mic on the 3.5 mm jack when one is plugged in. Needs the microphone permission.</string>
+    <string name="sentry_disarmed_format">Disarmed: %1$s</string>
+    <string name="sentry_armed_format">Armed for %1$d min</string>
 </resources>

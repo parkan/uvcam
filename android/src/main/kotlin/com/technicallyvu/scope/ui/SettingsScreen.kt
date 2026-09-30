@@ -84,6 +84,7 @@ fun SettingsScreen(
     onChange: (Settings) -> Unit,
     onBack: () -> Unit,
     onAbout: () -> Unit,
+    onArm: (Int) -> Unit = {},
 ) {
     BackHandler(enabled = true, onBack = onBack)
     var confirmingReset by remember { mutableStateOf(false) }
@@ -197,6 +198,14 @@ fun SettingsScreen(
                     TextButton(onClick = { onChange(settings.copy(tipsDismissed = false)) }) {
                         Text(stringResource(R.string.settings_show_tips_again))
                     }
+                }
+            }
+
+            GroupHeader(R.string.settings_group_sentry)
+            HelperText(stringResource(R.string.settings_sentry_help))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+                for (m in listOf(30, 60, 90, 120)) {
+                    TextButton(onClick = { onArm(m) }) { Text(stringResource(R.string.settings_arm_format, m)) }
                 }
             }
 

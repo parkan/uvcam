@@ -122,9 +122,16 @@ class MainActivity : ComponentActivity() {
                     if (keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
+                // armed: screen stays on (see keepScreenOn) but as dark as the panel allows
+                val armed by remember { vm.ui.map { it.sentry != null }.distinctUntilChanged() }.collectAsState(false)
+                LaunchedEffect(armed) {
+                    window.attributes = window.attributes.apply { screenBrightness = if (armed) 0.01f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
+                }
                 ScopeScreen(vm, onRequestPermission = ::requestUsbPermission)
             }
         }
+        // launched by a trigger while not running: refused as disarmed, but logged like any other
+        handleTrigger(intent)
     }
 
     private fun requestUsbPermission(device: UsbDevice) {
