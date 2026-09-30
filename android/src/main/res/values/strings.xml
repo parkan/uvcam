@@ -1,7 +1,7 @@
 <resources>
-    <string name="app_name">USB Scope</string>
+    <string name="app_name">UV Cam</string>
     <!-- Placeholder until the repository has a public home; tracked in phase3a-notes. -->
-    <string name="source_url">https://github.com/technicallyvu/usb-scope</string>
+    <string name="source_url">https://github.com/parkan/uvcam</string>
 
     <!-- Launcher icon: an all-vector adaptive icon (res/drawable/ic_launcher_background.xml,
          ic_launcher_foreground.xml and ic_launcher_monochrome.xml) - a phone with a USB-C plug and
@@ -23,7 +23,7 @@
     <string name="snapshot_saved">Saved</string>
 
     <!-- ===== Live-view prompts (shown in place of the image) ===== -->
-    <string name="live_view_no_device">Plug in your endoscope.</string>
+    <string name="live_view_no_device">Plug in the UV camera.</string>
     <string name="live_view_connecting">Connecting…</string>
     <string name="live_view_waiting_first_frame">Waiting for the first frame…</string>
     <string name="live_view_permission_needed">USB permission needed.</string>
@@ -40,7 +40,7 @@
     <!-- ===== Media library ===== -->
     <!-- The album under Pictures/ and Movies/. Not translated: a translated album name would
          orphan everything already saved, and MediaStore paths are not user-facing text. -->
-    <string name="media_folder_name" translatable="false">USB Scope</string>
+    <string name="media_folder_name" translatable="false">UV Cam</string>
 
     <!-- ===== Driver display names =====
          Never show a driver id or `core`'s protocol label: both are engineering strings and one

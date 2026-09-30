@@ -11,7 +11,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.technicallyvu.scope"
+        applicationId = "id.corvid.uvcam"
         minSdk = 29
         targetSdk = 36
         versionCode = 3
