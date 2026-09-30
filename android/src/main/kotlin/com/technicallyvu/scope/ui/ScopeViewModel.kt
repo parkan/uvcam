@@ -111,6 +111,11 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     private val usbManager = app.getSystemService(UsbManager::class.java)
     private val usbDevices = AndroidDeviceSource(usbManager)
     private val saver = MediaStoreSaver(app)
+    val appSettingsPublic: AppSettings get() = appSettings
+    /** Set by the activity while the pair-visible setting is on and the camera permission is granted. */
+    @Volatile var visibleCamera: com.technicallyvu.scope.media.VisibleCamera? = null
+    /** Current display rotation, supplied by the activity; read right before a paired capture. */
+    @Volatile var displayRotation: () -> Int = { 0 }
 
     // The stats overlay is a persisted preference; the initial UI state has to agree with the store
     // before the settings collector below has run even once.
@@ -132,8 +137,18 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
             // result, so nothing downstream churned, but the work was still being done. One
             // boolean, de-duplicated, leaves the combine idle unless the stream actually starts or
             // stops.
+            // also while recording: the screen going to sleep stops the activity, which unbinds
+            // the paired phone camera and cuts its clip short (seen 2026-09-26, 71 s of 304 s)
             _ui.map { it.session.connection is ConnectionState.Streaming }.distinctUntilChanged(),
-        ) { s, streaming -> s.keepScreenOn && streaming }
+            _ui.map { it.recordingStartedAtNanos != null }.distinctUntilChanged(),
+            _ui.map { it.sentry != null }.distinctUntilChanged(),
+        ) { s, streaming, recording, armed ->
+            // the preference governs plain streaming. a recording with a paired phone clip holds
+            // the screen regardless: the lifecycle-bound camera dies with the screen, and the
+            // preference was off on the field phone when that cut two clips at 72 s (2026-09-27)
+            // armed: the activity must stay resumed so the trigger intents and the phone camera keep working
+            (s.keepScreenOn && streaming) || (recording && (s.pairVisibleVideo || s.pairVisible)) || armed
+        }
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /** Whether the per-second frame-timing log is being written; debug builds only, on by default. */
@@ -519,7 +534,9 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
                     // the recording that was just started.
                     session.setRecording(true)
                     // The REC badge counts from here: the moment the encoder actually took over.
-                    _ui.update { it.copy(recordingStartedAtNanos = System.nanoTime()) }
+                    val t0 = System.nanoTime()
+                    _ui.update { it.copy(recordingStartedAtNanos = t0) }
+                    startPairedVideo(name, t0)
                 }
                 if (fromButton) message(R.string.status_recording_started)
                 // "Saved" is reported by stopRecordingLocked, once the clip is actually finalised and kept.
@@ -548,9 +565,112 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
             if (kept) session.markSaved(video.displayName)
         }
         session.setRecording(false)
-        _ui.update { it.copy(recordingStartedAtNanos = null) }
+        val stopNanos = System.nanoTime()
+        _ui.update { u ->
+            u.copy(recordingStartedAtNanos = null, sentry = u.sentry?.let { s ->
+                s.copy(recordedMs = s.recordedMs + (stopNanos - (u.recordingStartedAtNanos ?: stopNanos)) / 1_000_000, lastStopNanos = stopNanos, lastEvent = "waiting")
+            })
+        }
+        visibleCamera?.stopRecording()
         if (fromButton) message(R.string.status_recording_stopped)
     }
+
+    /**
+     * Paired phone-camera clip, started right after the scope encoder took over at [scopeStartNanos].
+     * The two clips cannot share a container, so the alignment goes into the file name: the phone
+     * clip is renamed on finalize to carry its start offset in ms relative to the scope clip.
+     */
+    private fun startPairedVideo(scopeName: String, scopeStartNanos: Long) {
+        val vis = visibleCamera ?: return
+        if (!appSettings.flow.value.pairVisibleVideo || !vis.isBound) return
+        val base = scopeName.removeSuffix(".mp4") + "_vis"
+        var offsetMs = 0L
+        viewModelScope.launch(Dispatchers.Main) {
+            vis.updateRotation(displayRotation())
+            runCatching {
+                vis.startRecording(
+                    displayName = "$base.mp4",
+                    withAudio = appSettings.flow.value.pairAudio,
+                    onStart = { t -> offsetMs = (t - scopeStartNanos) / 1_000_000 },
+                    onFinalize = { uri, err ->
+                        // a clip cut short (source inactive, storage) is still a clip: keep the
+                        // offset in its name and say what happened
+                        if (uri != null) runCatching { vis.rename(uri, "%s_%+dms.mp4".format(base, offsetMs)) }
+                        if (err != null) message(R.string.error_visible_video_failed_format, err)
+                    },
+                )
+            }.onFailure { e -> message(R.string.error_visible_video_failed_format, e.message.orEmpty()) }
+        }
+    }
+
+
+    // ---- sentry: on-device arming, external start/stop triggers ----
+    private var sentryJob: Job? = null
+    private var triggerStopJob: Job? = null
+
+    private fun batteryPercent(): Int =
+        getApplication<Application>().getSystemService(android.os.BatteryManager::class.java).getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+
+    /** Arm for [minutes]. Only the user can do this, from the settings screen; nothing over the network can. */
+    fun arm(minutes: Int) {
+        val now = System.nanoTime()
+        _ui.update { it.copy(sentry = Sentry(now, now + minutes * 60_000_000_000L), screen = Screen.Live, returnTo = Screen.Live, message = null) }
+        Log.i(SENTRY_TAG, "armed for $minutes min, battery ${batteryPercent()}%")
+        message(R.string.sentry_armed_format, minutes)
+        sentryJob?.cancel()
+        sentryJob = viewModelScope.launch {
+            while (true) {
+                delay(5_000)
+                val s = _ui.value.sentry ?: return@launch
+                if (System.nanoTime() >= s.untilNanos) { disarm("time is up"); return@launch }
+                if (batteryPercent() <= SENTRY_BATTERY_FLOOR) { disarm("battery low"); return@launch }
+            }
+        }
+    }
+
+    fun disarm(reason: String) {
+        if (_ui.value.sentry == null) return
+        sentryJob?.cancel(); sentryJob = null
+        triggerStopJob?.cancel(); triggerStopJob = null
+        Log.i(SENTRY_TAG, "disarmed: $reason")
+        _ui.update { it.copy(sentry = null) }
+        if (recorder != null) viewModelScope.launch(Dispatchers.IO) { stopRecordingIfActive() }
+        message(R.string.sentry_disarmed_format, reason)
+    }
+
+    /** An external trigger. Every refusal is logged with its reason; the armed overlay counts them. */
+    fun onTrigger(start: Boolean, durationSec: Int) {
+        val s = _ui.value.sentry
+        val what = if (start) "start" else "stop"
+        fun refuse(why: String) {
+            Log.i(SENTRY_TAG, "trigger $what refused: $why")
+            if (s != null) _ui.update { it.copy(sentry = s.copy(refused = s.refused + 1, lastEvent = "refused $what: $why")) }
+        }
+        if (s == null) { refuse("disarmed"); return }
+        if (!start) {
+            if (recorder == null) { refuse("not recording"); return }
+            Log.i(SENTRY_TAG, "trigger stop accepted")
+            triggerStopJob?.cancel(); triggerStopJob = null
+            toggleRecording()
+            return
+        }
+        val now = System.nanoTime()
+        when {
+            recorder != null || recordingTransition -> refuse("busy")
+            s.lastStopNanos != 0L && now - s.lastStopNanos < SENTRY_COOLDOWN_NANOS -> refuse("cooldown")
+            s.recordedMs >= SENTRY_BUDGET_MS -> refuse("recording budget spent")
+            _ui.value.session.connection !is ConnectionState.Streaming -> refuse("scope not streaming")
+            else -> {
+                val dur = durationSec.coerceIn(5, 300)
+                Log.i(SENTRY_TAG, "trigger start accepted: $dur s")
+                _ui.update { it.copy(sentry = s.copy(accepted = s.accepted + 1, lastEvent = "recording $dur s")) }
+                toggleRecording()
+                triggerStopJob?.cancel()
+                triggerStopJob = viewModelScope.launch { delay(dur * 1000L); if (recorder != null && _ui.value.sentry != null) toggleRecording() }
+            }
+        }
+    }
+
 
     // ---- USB events from the activity ----
     fun onDeviceDetached(deviceName: String) = usbDevices.onDetached(deviceName)

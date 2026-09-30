@@ -13,7 +13,16 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
+import com.technicallyvu.scope.media.VisibleCamera
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
@@ -42,9 +51,62 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val visibleCamera by lazy { VisibleCamera(this) }
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) bindVisibleCamera() else vm.appSettingsPublic.update { it.copy(pairVisible = false, pairVisibleVideo = false) }
+    }
+
+    private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) vm.appSettingsPublic.update { it.copy(pairAudio = false) }
+    }
+
+    /** Tasker sends extras as strings; accept either form. */
+    private fun handleTrigger(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_START_RECORDING -> vm.onTrigger(true, intent.extras?.get("duration")?.toString()?.toIntOrNull() ?: 60)
+            ACTION_STOP_RECORDING -> vm.onTrigger(false, 0)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleTrigger(intent)
+    }
+
+    private fun hasCameraPermission() =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    private fun bindVisibleCamera() {
+        visibleCamera.bind(this, display?.rotation ?: 0)
+        vm.visibleCamera = visibleCamera
+        vm.displayRotation = { display?.rotation ?: 0 }
+    }
+
+    private fun unbindVisibleCamera() {
+        vm.visibleCamera = null
+        visibleCamera.unbind()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // the pair-visible setting owns the back camera: on -> ask once and bind, off -> release
+        lifecycleScope.launch {
+            vm.appSettingsPublic.flow.map { it.pairVisible || it.pairVisibleVideo }.distinctUntilChanged().collect { on ->
+                when {
+                    !on -> unbindVisibleCamera()
+                    hasCameraPermission() -> bindVisibleCamera()
+                    else -> cameraPermission.launch(Manifest.permission.CAMERA)
+                }
+            }
+        }
+        lifecycleScope.launch {
+            vm.appSettingsPublic.flow.map { it.pairAudio }.distinctUntilChanged().collect { on ->
+                if (on && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    audioPermission.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
+        }
         val filter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
             addAction(ACTION_USB_PERMISSION)
@@ -74,12 +136,15 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        unbindVisibleCamera()
         unregisterReceiver(receiver)
         super.onDestroy()
     }
 
     companion object {
         const val ACTION_USB_PERMISSION = "com.technicallyvu.scope.USB_PERMISSION"
+        const val ACTION_START_RECORDING = "id.corvid.uvcam.START_RECORDING"
+        const val ACTION_STOP_RECORDING = "id.corvid.uvcam.STOP_RECORDING"
         /** SharedPreferences file backing [AppSettings]. */
         const val PREFS_NAME = "scope_settings"
     }

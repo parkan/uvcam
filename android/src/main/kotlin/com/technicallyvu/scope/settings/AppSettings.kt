@@ -28,6 +28,10 @@ data class Settings(
     val keepScreenOn: Boolean = true,
     val showStats: Boolean = false,
     val tipsDismissed: Boolean = false,
+    val pairVisible: Boolean = false,
+    val pairVisibleVideo: Boolean = false,
+    /** Record the phone's microphone (3.5 mm jack when plugged) into the paired video. */
+    val pairAudio: Boolean = false,
     val defaults: Map<String, DriverDefault> = emptyMap(),
 )
 
@@ -69,6 +73,9 @@ class AppSettings(private val prefs: SharedPreferences) {
             keepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, true),
             showStats = prefs.getBoolean(KEY_SHOW_STATS, false),
             tipsDismissed = prefs.getBoolean(KEY_TIPS_DISMISSED, false),
+            pairVisible = prefs.getBoolean(KEY_PAIR_VISIBLE, false),
+            pairVisibleVideo = prefs.getBoolean(KEY_PAIR_VISIBLE_VIDEO, false),
+            pairAudio = prefs.getBoolean(KEY_PAIR_AUDIO, false),
             defaults = parseDefaults(prefs.getString(KEY_DEFAULTS, null)),
         ),
     )
@@ -84,6 +91,9 @@ class AppSettings(private val prefs: SharedPreferences) {
             .putBoolean(KEY_KEEP_SCREEN_ON, s.keepScreenOn)
             .putBoolean(KEY_SHOW_STATS, s.showStats)
             .putBoolean(KEY_TIPS_DISMISSED, s.tipsDismissed)
+            .putBoolean(KEY_PAIR_VISIBLE, s.pairVisible)
+            .putBoolean(KEY_PAIR_VISIBLE_VIDEO, s.pairVisibleVideo)
+            .putBoolean(KEY_PAIR_AUDIO, s.pairAudio)
             .putString(KEY_DEFAULTS, serializeDefaults(s.defaults))
             .apply()
     }
@@ -98,6 +108,9 @@ class AppSettings(private val prefs: SharedPreferences) {
         const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
         const val KEY_SHOW_STATS = "show_stats"
         const val KEY_TIPS_DISMISSED = "tips_dismissed"
+        const val KEY_PAIR_VISIBLE = "pair_visible"
+        const val KEY_PAIR_VISIBLE_VIDEO = "pair_visible_video"
+        const val KEY_PAIR_AUDIO = "pair_audio"
         const val KEY_DEFAULTS = "driver_defaults"
 
         private const val ENTRY_SEPARATOR = ";"

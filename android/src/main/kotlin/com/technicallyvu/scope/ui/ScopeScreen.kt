@@ -106,6 +106,7 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     // recomposition, and this screen recomposes per frame, which would recompose all of
     // TrustScreen (license text included) at the frame rate while it is open.
     val onBack = remember(vm) { { vm.navigate(Screen.Live) } }
+    Box(Modifier.fillMaxSize()) {
     when (ui.screen) {
         Screen.Trust -> {
             // Null in a release build: this is the only thing that ever constructs a DevControls,

@@ -92,6 +92,12 @@
     <string name="settings_double_press_window_help">Press the cable button once for a photo. Press it twice within this time to start or stop a clip.</string>
     <string name="settings_haptics_label">Vibrate on cable button</string>
     <string name="settings_keep_screen_on_label">Keep screen on while streaming</string>
+    <string name="settings_pair_visible_label">Pair a back-camera photo with each snapshot</string>
+    <string name="settings_pair_visible_help">Saves SCOPE_&lt;time&gt;_vis.jpg from the phone camera alongside every UV snapshot, for registering scope features onto a normal photo. Needs the camera permission.</string>
+    <string name="error_visible_capture_failed_format">Back-camera photo failed: %1$s</string>
+    <string name="settings_pair_visible_video_label">Pair a back-camera video with each recording</string>
+    <string name="settings_pair_visible_video_help">Records SCOPE_&lt;time&gt;_vis_+&lt;offset&gt;ms.mp4 from the phone camera alongside every UV recording, 720p, no audio. The offset in the name is how many milliseconds after the UV recording the phone video started, for aligning the two. Needs the camera permission.</string>
+    <string name="error_visible_video_failed_format">Back-camera video failed: %1$s</string>
     <string name="settings_show_stats_label">Show stream statistics</string>
     <string name="settings_show_tips_again">Show tips again</string>
     <!-- Per-device orientation memory: written when the picture is rotated or mirrored in the live view. -->

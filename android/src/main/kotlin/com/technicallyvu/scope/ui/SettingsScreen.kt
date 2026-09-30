@@ -164,6 +164,24 @@ fun SettingsScreen(
                 onCheckedChange = { onChange(settings.copy(haptics = it)) },
             )
             SwitchRow(
+                label = stringResource(R.string.settings_pair_visible_label),
+                checked = settings.pairVisible,
+                onCheckedChange = { onChange(settings.copy(pairVisible = it)) },
+            )
+            HelperText(stringResource(R.string.settings_pair_visible_help))
+            SwitchRow(
+                label = stringResource(R.string.settings_pair_visible_video_label),
+                checked = settings.pairVisibleVideo,
+                onCheckedChange = { onChange(settings.copy(pairVisibleVideo = it)) },
+            )
+            HelperText(stringResource(R.string.settings_pair_visible_video_help))
+            SwitchRow(
+                label = stringResource(R.string.settings_pair_audio_label),
+                checked = settings.pairAudio,
+                onCheckedChange = { onChange(settings.copy(pairAudio = it)) },
+            )
+            HelperText(stringResource(R.string.settings_pair_audio_help))
+            SwitchRow(
                 label = stringResource(R.string.settings_keep_screen_on_label),
                 checked = settings.keepScreenOn,
                 onCheckedChange = { onChange(settings.copy(keepScreenOn = it)) },
