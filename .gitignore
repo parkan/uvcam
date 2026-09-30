@@ -12,3 +12,5 @@ __pycache__/
 *.jks
 *.keystore
 keystore.properties
+# local gradle cache used by the container build
+.gradle-home/
