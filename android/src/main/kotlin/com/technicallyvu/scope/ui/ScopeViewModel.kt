@@ -176,6 +176,7 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     private var stateJob: Job? = null
     @Volatile private var lastFrame: FrameData? = null
     @Volatile private var lastImage: Bitmap? = null
+    @Volatile private var lastRawSize: Pair<Int, Int> = 640 to 480
     private val recorderLock = Any()
     // Mutated only under recorderLock; @Volatile so the state collector can read "is anything
     // recording?" from the main thread without taking the lock.
@@ -269,8 +270,11 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
             val bmp = bitmaps.toBitmap(frame.data, denoiser, sharpener) ?: return
             val shown = bitmaps.transform(bmp, state.rotation, state.mirror)
             lastImage = shown
+            lastRawSize = bmp.width to bmp.height
+            // files are written in the scope's native frame: rotate/mirror only affect what is shown,
+            // so every recording and snapshot shares one fixed geometry for registration in post
             synchronized(recorderLock) {
-                recorder?.let { rec -> runCatching { rec.record(shown) }.onFailure { stopRecordingLocked(keep = true) } }
+                recorder?.let { rec -> runCatching { rec.record(bmp) }.onFailure { stopRecordingLocked(keep = true) } }
             }
             _ui.update { it.copy(image = shown) }
             if (BuildConfig.DEBUG && _logFrameTiming.value) logTiming(t0, state)
@@ -443,20 +447,35 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         // newer thumbnail than the one it was started for. Atomic: cable-button snapshots arrive on
         // the session's worker thread, on-screen ones on Main.
         val thumbGeneration = snapshotGeneration.incrementAndGet()
+        // Fire the back-camera capture first: it is the slower of the two and the scope frame is
+        // already in hand, so this is as simultaneous as the pair gets. Its own failure only reports.
+        val vis = visibleCamera
+        if (appSettings.flow.value.pairVisible && vis != null && vis.isBound) {
+            viewModelScope.launch {
+                vis.updateRotation(displayRotation())
+                vis.refocusAndWait()
+                runCatching { vis.captureJpeg() }
+                    .mapCatching { bytes -> withContext(Dispatchers.IO) { saver.saveJpeg(bytes, null, name.removeSuffix(".jpg") + "_vis.jpg") } }
+                    .onFailure { e -> message(R.string.error_visible_capture_failed_format, e.message.orEmpty()) }
+            }
+        }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 when {
                     // A snapshot saves what the user sees. With denoise or sharpen on that is the
                     // filtered picture, which only exists as pixels, so both frame kinds go through
                     // the bitmap (re-encoded JPEG at quality 92, rotation/mirror already baked in).
-                    s.denoise || s.sharpen -> saver.saveBitmapJpeg(shown, name)
-                    // Original bytes plus an EXIF orientation tag: no re-encode, no quality loss.
-                    data is FrameData.Jpeg -> saver.saveJpeg(data.bytes, ExifOrientation.of(s.rotation, s.mirror), name)
+                    // Rotation/mirror also go through the bitmap: the EXIF orientation write in
+                    // saveJpeg is best-effort and silently fails on some devices (observed on an
+                    // Xperia 5 IV, Android 14), leaving the file in raw sensor orientation.
+                    s.denoise || s.sharpen -> saver.saveBitmapJpeg(untransformed(shown, s.rotation, s.mirror), name)
+                    // Original bytes, untouched: nothing to orient, no re-encode.
+                    data is FrameData.Jpeg -> saver.saveJpeg(data.bytes, null, name)
                     // Compress the bitmap the user is looking at. Never re-convert: FrameBitmaps
                     // reuses its pixel buffer for the worker's next frame. Every bitmap handed to
                     // the UI is freshly allocated per frame and never written to again once
                     // published, so compressing here while the worker moves on is safe.
-                    else -> saver.saveBitmapJpeg(shown, name)
+                    else -> saver.saveBitmapJpeg(untransformed(shown, s.rotation, s.mirror), name)
                 }
             }.onSuccess {
                 session.markSaved(name)
@@ -502,6 +521,16 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
      * "Recording started/stopped" message; the on-screen button already shows its own state and
      * stays silent.
      */
+
+    /** Undo the display rotate/mirror (FrameBitmaps.transform = mirror, then rotate): with mirror on the transform is its own inverse. */
+    private fun untransformed(b: Bitmap, rotationDegrees: Int, mirror: Boolean): Bitmap {
+        val rot = ((rotationDegrees % 360) + 360) % 360
+        if (rot == 0 && !mirror) return b
+        val m = android.graphics.Matrix()
+        if (mirror) { m.preScale(-1f, 1f); m.postRotate(rot.toFloat()) } else m.postRotate(-rot.toFloat())
+        return Bitmap.createBitmap(b, 0, 0, b.width, b.height, m, true)
+    }
+
     fun toggleRecording(fromButton: Boolean = false) {
         if (recordingTransition) return
         val active = recorder != null
@@ -523,7 +552,8 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
                 val generation = synchronized(recorderLock) { recorderGeneration }
                 val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".mp4"
                 val video = runCatching { saver.createVideo(name) }.getOrElse { e -> message(R.string.error_recording_start_failed_format, e.message.orEmpty()); return@launch }
-                val created = runCatching { SurfaceRecorder(getApplication(), video.fd, img.width, img.height) }
+                val (rawW, rawH) = lastRawSize
+                val created = runCatching { SurfaceRecorder(getApplication(), video.fd, rawW, rawH) }
                     .getOrElse { e -> saver.finishVideo(video, keep = false); message(R.string.error_recording_start_failed_format, e.message.orEmpty()); return@launch }
                 synchronized(recorderLock) {
                     if (recorder != null || recorderGeneration != generation) { runCatching { created.close() }; saver.finishVideo(video, keep = false); return@launch }
