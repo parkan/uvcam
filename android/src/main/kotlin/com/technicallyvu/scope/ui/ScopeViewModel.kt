@@ -131,7 +131,14 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     private val saver = MediaStoreSaver(app)
     val appSettingsPublic: AppSettings get() = appSettings
     /** Set by the activity while the pair-visible setting is on and the camera permission is granted. */
-    @Volatile var visibleCamera: com.technicallyvu.scope.media.VisibleCamera? = null
+    @Volatile private var _visibleCamera: com.technicallyvu.scope.media.VisibleCamera? = null
+    /**
+     * Set by the activity once the back camera is bound. The align preview can be on screen before
+     * that (permission dialog, cold start with align on), so a pending view is attached here.
+     */
+    var visibleCamera: com.technicallyvu.scope.media.VisibleCamera?
+        get() = _visibleCamera
+        set(v) { _visibleCamera = v; previewView?.let { pv -> v?.attachPreview(pv) } }
     /** Current display rotation, supplied by the activity; read right before a paired capture. */
     @Volatile var displayRotation: () -> Int = { 0 }
 
@@ -409,6 +416,44 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     fun rotate() { session.rotate(); rememberOrientation() }
     fun toggleMirror() { session.toggleMirror(); rememberOrientation() }
     fun toggleStats() = appSettings.update { it.copy(showStats = !it.showStats) }
+
+    // ---- align mode: the uv frame laid over the live phone preview ----
+    fun toggleAlign() = appSettings.update { it.copy(alignMode = !it.alignMode) }
+    fun setAlign(w: Float? = null, x: Float? = null, y: Float? = null, alpha: Float? = null) = appSettings.update {
+        it.copy(alignW = w ?: it.alignW, alignX = x ?: it.alignX, alignY = y ?: it.alignY, alignAlpha = alpha ?: it.alignAlpha)
+    }
+    @Volatile private var previewView: androidx.camera.view.PreviewView? = null
+    fun attachPreview(view: androidx.camera.view.PreviewView) { previewView = view; visibleCamera?.attachPreview(view) }
+    fun detachPreview() { previewView = null; visibleCamera?.detachPreview() }
+
+    /** Gradient search of the current uv frame over the current preview frame; Main thread. */
+    fun fitAlign() {
+        val uv = lastImage
+        val pv = previewView?.bitmap
+        if (uv == null || pv == null) { message(R.string.align_fit_no_input); return }
+        val s = appSettings.flow.value
+        viewModelScope.launch(Dispatchers.Default) {
+            val r = com.technicallyvu.scope.media.AlignFit.fit(pv, uv, s.alignW, s.alignX, s.alignY)
+            if (r.score > 0f) appSettings.update { it.copy(alignW = r.w, alignX = r.x, alignY = r.y) }
+            message(R.string.align_fit_result_format, r.score, r.w)
+        }
+    }
+
+    /** The align view as a picture: preview frame with the uv frame composited where it is shown. Main thread. */
+    private fun alignComposite(): Bitmap? {
+        val uv = lastImage ?: return null
+        val pv = previewView?.bitmap ?: return null
+        val s = appSettings.flow.value
+        val out = pv.copy(Bitmap.Config.ARGB_8888, true)
+        val c = android.graphics.Canvas(out)
+        val w = s.alignW * out.width; val h = w * uv.height / uv.width
+        val l = s.alignX * out.width - w / 2; val t = s.alignY * out.height - h / 2
+        val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG).apply { alpha = (s.alignAlpha * 255).toInt() }
+        c.drawBitmap(uv, null, android.graphics.RectF(l, t, l + w, t + h), paint)
+        val box = android.graphics.Paint().apply { style = android.graphics.Paint.Style.STROKE; strokeWidth = 3f; color = android.graphics.Color.YELLOW }
+        c.drawRect(l, t, l + w, t + h, box)
+        return out
+    }
     /**
      * Switches destination, remembering where [Screen.Trust] was entered from so its back arrow can
      * return there (see [UiState.returnTo]), and dropping any pending [UiState.message]: the
@@ -467,6 +512,14 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         val thumbGeneration = snapshotGeneration.incrementAndGet()
         // Fire the back-camera capture first: it is the slower of the two and the scope frame is
         // already in hand, so this is as simultaneous as the pair gets. Its own failure only reports.
+        // Align mode also saves what is on screen: preview plus the placed uv frame. The preview
+        // bitmap is only readable on Main, so the composite is built here and encoded on IO.
+        if (appSettings.flow.value.alignMode) {
+            val comp = runCatching { alignComposite() }.getOrNull()
+            if (comp != null) viewModelScope.launch(Dispatchers.IO) {
+                runCatching { saver.saveBitmapJpeg(comp, name.removeSuffix(".jpg") + "_overlay.jpg") }
+            }
+        }
         val vis = visibleCamera
         if (appSettings.flow.value.pairVisible && vis != null && vis.isBound) {
             viewModelScope.launch {
@@ -632,22 +685,43 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         val vis = visibleCamera ?: return
         if (!appSettings.flow.value.pairVisibleVideo || !vis.isBound) return
         val base = scopeName.removeSuffix(".mp4") + "_vis"
+        viewModelScope.launch(Dispatchers.Main) { attemptPairedVideo(vis, base, scopeStartNanos, retry = true) }
+    }
+
+    /**
+     * Starts the phone clip and watches for its Start event. No Start within 3 s means the
+     * recorder is stuck pending (camera not feeding the video surface): tear down, rebind and
+     * try once more, then say so right away instead of at stop time.
+     */
+    private suspend fun attemptPairedVideo(vis: com.technicallyvu.scope.media.VisibleCamera, base: String, scopeStartNanos: Long, retry: Boolean) {
         var offsetMs = 0L
-        viewModelScope.launch(Dispatchers.Main) {
-            vis.updateRotation(displayRotation())
-            runCatching {
-                vis.startRecording(
-                    displayName = "$base.mp4",
-                    withAudio = appSettings.flow.value.pairAudio,
-                    onStart = { t -> offsetMs = (t - scopeStartNanos) / 1_000_000 },
-                    onFinalize = { uri, err ->
-                        // a clip cut short (source inactive, storage) is still a clip: keep the
-                        // offset in its name and say what happened
-                        if (uri != null) runCatching { vis.rename(uri, "%s_%+dms.mp4".format(base, offsetMs)) }
-                        if (err != null) message(R.string.error_visible_video_failed_format, err)
-                    },
-                )
-            }.onFailure { e -> message(R.string.error_visible_video_failed_format, e.message.orEmpty()) }
+        var started = false
+        var aborted = false
+        vis.updateRotation(displayRotation())
+        val ok = runCatching {
+            vis.startRecording(
+                displayName = "$base.mp4",
+                withAudio = appSettings.flow.value.pairAudio,
+                onStart = { t -> started = true; offsetMs = (t - scopeStartNanos) / 1_000_000 },
+                onFinalize = { uri, err ->
+                    // a clip cut short (source inactive, storage) is still a clip: keep the
+                    // offset in its name and say what happened
+                    if (uri != null) runCatching { vis.rename(uri, "%s_%+dms.mp4".format(base, offsetMs)) }
+                    if (err != null && !aborted) message(R.string.error_visible_video_failed_format, err)
+                },
+            )
+        }.onFailure { e -> message(R.string.error_visible_video_failed_format, e.message.orEmpty()) }.isSuccess
+        if (!ok) return
+        delay(3_000)
+        if (started || _ui.value.recordingStartedAtNanos == null) return
+        aborted = true
+        Log.w(SENTRY_TAG, "phone video stuck pending, retry=$retry")
+        vis.resetAfterStall()
+        if (retry) {
+            delay(1_000)
+            attemptPairedVideo(vis, base, scopeStartNanos, retry = false)
+        } else {
+            message(R.string.error_visible_video_not_started)
         }
     }
 

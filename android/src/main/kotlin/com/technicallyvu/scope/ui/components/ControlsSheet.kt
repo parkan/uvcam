@@ -70,6 +70,8 @@ fun ControlsSheet(
     onRotate: () -> Unit,
     onToggleMirror: () -> Unit,
     onToggleDenoise: () -> Unit,
+    align: Boolean,
+    onToggleAlign: () -> Unit,
     onToggleStats: () -> Unit,
     onSettings: () -> Unit,
     onAbout: () -> Unit,
@@ -122,6 +124,12 @@ fun ControlsSheet(
             checked = denoise,
             onCheckedChange = { onInteract(); onToggleDenoise() },
         ) { tint -> denoiseGlyph(tint) }
+
+        GlyphToggleButton(
+            contentDescription = stringResource(R.string.cd_align),
+            checked = align,
+            onCheckedChange = { onInteract(); onToggleAlign() },
+        ) { tint -> alignGlyph(tint) }
 
         GlyphToggleButton(
             contentDescription = stringResource(R.string.cd_stats),
@@ -325,6 +333,13 @@ private fun DrawScope.denoiseGlyph(tint: Color) {
 }
 
 /** Three bars, ascending-ish: the stats overlay toggle. */
+/** Two offset frames: the uv picture laid over the phone picture. */
+private fun DrawScope.alignGlyph(tint: Color) {
+    val s = size.minDimension
+    drawRect(tint, topLeft = Offset(s * 0.12f, s * 0.20f), size = Size(s * 0.52f, s * 0.52f), style = Stroke(width = s * 0.08f))
+    drawRect(tint, topLeft = Offset(s * 0.36f, s * 0.40f), size = Size(s * 0.52f, s * 0.40f), style = Stroke(width = s * 0.08f))
+}
+
 private fun DrawScope.statsGlyph(tint: Color) {
     val w = size.width
     val h = size.height

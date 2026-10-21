@@ -30,6 +30,12 @@ data class Settings(
     val tipsDismissed: Boolean = false,
     val pairVisible: Boolean = false,
     val pairVisibleVideo: Boolean = false,
+    /** Align mode: phone preview behind the uv image, uv drawn at [alignW]/[alignX]/[alignY] (fractions of the view) with [alignAlpha]. */
+    val alignMode: Boolean = false,
+    val alignW: Float = 0.37f,
+    val alignX: Float = 0.5f,
+    val alignY: Float = 0.5f,
+    val alignAlpha: Float = 0.55f,
     /** Record the phone's microphone (3.5 mm jack when plugged) into the paired video. */
     val pairAudio: Boolean = false,
     val defaults: Map<String, DriverDefault> = emptyMap(),
@@ -75,6 +81,11 @@ class AppSettings(private val prefs: SharedPreferences) {
             tipsDismissed = prefs.getBoolean(KEY_TIPS_DISMISSED, false),
             pairVisible = prefs.getBoolean(KEY_PAIR_VISIBLE, false),
             pairVisibleVideo = prefs.getBoolean(KEY_PAIR_VISIBLE_VIDEO, false),
+            alignMode = prefs.getBoolean(KEY_ALIGN_MODE, false),
+            alignW = prefs.getFloat(KEY_ALIGN_W, 0.37f),
+            alignX = prefs.getFloat(KEY_ALIGN_X, 0.5f),
+            alignY = prefs.getFloat(KEY_ALIGN_Y, 0.5f),
+            alignAlpha = prefs.getFloat(KEY_ALIGN_ALPHA, 0.55f),
             pairAudio = prefs.getBoolean(KEY_PAIR_AUDIO, false),
             defaults = parseDefaults(prefs.getString(KEY_DEFAULTS, null)),
         ),
@@ -93,6 +104,11 @@ class AppSettings(private val prefs: SharedPreferences) {
             .putBoolean(KEY_TIPS_DISMISSED, s.tipsDismissed)
             .putBoolean(KEY_PAIR_VISIBLE, s.pairVisible)
             .putBoolean(KEY_PAIR_VISIBLE_VIDEO, s.pairVisibleVideo)
+            .putBoolean(KEY_ALIGN_MODE, s.alignMode)
+            .putFloat(KEY_ALIGN_W, s.alignW)
+            .putFloat(KEY_ALIGN_X, s.alignX)
+            .putFloat(KEY_ALIGN_Y, s.alignY)
+            .putFloat(KEY_ALIGN_ALPHA, s.alignAlpha)
             .putBoolean(KEY_PAIR_AUDIO, s.pairAudio)
             .putString(KEY_DEFAULTS, serializeDefaults(s.defaults))
             .apply()
@@ -110,6 +126,11 @@ class AppSettings(private val prefs: SharedPreferences) {
         const val KEY_TIPS_DISMISSED = "tips_dismissed"
         const val KEY_PAIR_VISIBLE = "pair_visible"
         const val KEY_PAIR_VISIBLE_VIDEO = "pair_visible_video"
+        const val KEY_ALIGN_MODE = "align_mode"
+        const val KEY_ALIGN_W = "align_w"
+        const val KEY_ALIGN_X = "align_x"
+        const val KEY_ALIGN_Y = "align_y"
+        const val KEY_ALIGN_ALPHA = "align_alpha"
         const val KEY_PAIR_AUDIO = "pair_audio"
         const val KEY_DEFAULTS = "driver_defaults"
 
@@ -130,6 +151,7 @@ class AppSettings(private val prefs: SharedPreferences) {
         }
 
         private fun clamp(s: Settings): Settings = s.copy(
+            alignW = s.alignW.coerceIn(0.05f, 2.0f), alignX = s.alignX.coerceIn(-1f, 2f), alignY = s.alignY.coerceIn(-1f, 2f), alignAlpha = s.alignAlpha.coerceIn(0f, 1f),
             denoiseStrength = clampStrength(s.denoiseStrength),
             sharpenStrength = clampSharpenStrength(s.sharpenStrength),
             doublePressWindowMs = clampWindow(s.doublePressWindowMs),

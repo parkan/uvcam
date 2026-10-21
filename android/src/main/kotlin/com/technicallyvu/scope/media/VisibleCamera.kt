@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.view.PreviewView
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.MediaStoreOutputOptions
@@ -45,6 +47,9 @@ class VisibleCamera(private val context: Context, private val folder: String = c
     private var recording: Recording? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var control: CameraControl? = null
+    private var owner: LifecycleOwner? = null
+    private var preview: Preview? = null
+    private var previewView: PreviewView? = null
 
     /** No-op by design: the target rotation is pinned to ROTATION_0 so files always carry the same sensor orientation. */
     fun updateRotation(displayRotation: Int) = Unit
@@ -85,6 +90,7 @@ class VisibleCamera(private val context: Context, private val folder: String = c
 
     fun bind(owner: LifecycleOwner, displayRotation: Int) {
         if (capture != null) return
+        this.owner = owner
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
             val p = future.get()
@@ -104,7 +110,7 @@ class VisibleCamera(private val context: Context, private val folder: String = c
             lockGeometry(vcb, physicalId)
             val vc = vcb.build()
             p.unbindAll()
-            val cam = p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, ic, vc)
+            val cam = bindAll(p, owner, ic, vc)
             cam.cameraControl.setZoomRatio(1f)
             control = cam.cameraControl
             refocus(hold = true)
@@ -113,6 +119,44 @@ class VisibleCamera(private val context: Context, private val folder: String = c
             recorder = rec
             videoCapture = vc
         }, ContextCompat.getMainExecutor(context))
+    }
+
+    /** Binds the still and video use cases plus the align-mode preview when one is attached. */
+    private fun bindAll(p: ProcessCameraProvider, owner: LifecycleOwner, ic: ImageCapture, vc: VideoCapture<Recorder>) =
+        preview?.let { p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, it, ic, vc) }
+            ?: p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, ic, vc)
+
+    /**
+     * Shows the back camera in [view] (align mode). Rebinds with a Preview use case; stills and
+     * video keep working. Main thread. A running clip is never interrupted: the preview then
+     * attaches on the next bind.
+     */
+    fun attachPreview(view: PreviewView) {
+        if (preview != null && previewView === view) return
+        previewView = view
+        val pv = Preview.Builder().build()
+        pv.surfaceProvider = view.surfaceProvider
+        preview = pv
+        rebind()
+    }
+
+    fun detachPreview() {
+        preview = null
+        previewView = null
+        rebind()
+    }
+
+    private fun rebind() {
+        val p = provider ?: return
+        val o = owner ?: return
+        val ic = capture ?: return
+        val vc = videoCapture ?: return
+        if (recording != null) return
+        p.unbindAll()
+        val cam = bindAll(p, o, ic, vc)
+        cam.cameraControl.setZoomRatio(1f)
+        control = cam.cameraControl
+        refocus(hold = true)
     }
 
     fun unbind() {
@@ -124,6 +168,9 @@ class VisibleCamera(private val context: Context, private val folder: String = c
         recorder = null
         videoCapture = null
         control = null
+        owner = null
+        preview = null
+        previewView = null
     }
 
 
@@ -201,6 +248,16 @@ class VisibleCamera(private val context: Context, private val folder: String = c
                 else -> Unit
             }
         }
+    }
+
+    /**
+     * A recording that never produced a Start event is stuck pending: the camera is not feeding
+     * the video surface (seen 2026-10-19, 25 min lost). Drop it and rebuild the session.
+     */
+    fun resetAfterStall() {
+        recording?.stop()
+        recording = null
+        rebind()
     }
 
     fun stopRecording() {

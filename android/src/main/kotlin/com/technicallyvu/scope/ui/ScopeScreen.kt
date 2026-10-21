@@ -1,5 +1,18 @@
 package com.technicallyvu.scope.ui
 
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.camera.view.PreviewView
+import com.technicallyvu.scope.settings.Settings
 import android.hardware.usb.UsbDevice
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
@@ -215,7 +228,40 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
     ) {
         // The picture is full-bleed: it is the whole point of the screen and the chrome floats over
         // it. Only the no-picture prompt below has to keep out of the chrome's way.
-        ui.image?.let { img ->
+        if (settings.alignMode) {
+            // Align mode: phone preview full-bleed behind, uv frame scaled and placed over it by the
+            // align params, so the user can dial the overlap by eye or let Fit find it.
+            var viewSize by remember { mutableStateOf(IntSize.Zero) }
+            AndroidView(
+                factory = { ctx ->
+                    PreviewView(ctx).apply {
+                        scaleType = PreviewView.ScaleType.FIT_CENTER
+                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                    }
+                },
+                update = { view -> vm.attachPreview(view) },
+                modifier = Modifier.fillMaxSize().onSizeChanged { viewSize = it },
+            )
+            DisposableEffect(Unit) { onDispose { vm.detachPreview() } }
+            val img = ui.image
+            if (img != null && viewSize.width > 0) {
+                val wPx = settings.alignW * viewSize.width
+                val hPx = wPx * img.height / img.width
+                val lPx = settings.alignX * viewSize.width - wPx / 2
+                val tPx = settings.alignY * viewSize.height - hPx / 2
+                val d = LocalDensity.current
+                Image(
+                    bitmap = img.asImageBitmap(),
+                    contentDescription = stringResource(R.string.cd_live_view),
+                    modifier = Modifier
+                        .offset(with(d) { lPx.toDp() }, with(d) { tPx.toDp() })
+                        .size(with(d) { wPx.toDp() }, with(d) { hPx.toDp() })
+                        .alpha(settings.alignAlpha)
+                        .border(1.dp, Color.Yellow),
+                    contentScale = ContentScale.FillBounds,
+                )
+            }
+        } else ui.image?.let { img ->
             Image(
                 bitmap = img.asImageBitmap(),
                 contentDescription = stringResource(R.string.cd_live_view),
@@ -225,6 +271,9 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
         }
 
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+            if (settings.alignMode) {
+                AlignPanel(settings, vm, Modifier.align(Alignment.TopEnd).padding(8.dp))
+            }
             if (ui.image == null) {
                 // Inside the inset box and padded by the measured chrome height, so "centred" means
                 // centred in the space actually left over.
@@ -304,7 +353,7 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
                 SnackbarHost(snackbarHostState)
                 if (!wide) {
                     AnimatedVisibility(visible = chromeVisible, enter = fadeIn(), exit = fadeOut()) {
-                        Sheet(ui, wide = false, onInteract = onInteract, actions = rememberSheetActions(vm))
+                        Sheet(ui, settings.alignMode, wide = false, onInteract = onInteract, actions = rememberSheetActions(vm))
                     }
                 }
             }
@@ -316,7 +365,7 @@ fun ScopeScreen(vm: ScopeViewModel, onRequestPermission: (UsbDevice) -> Unit) {
                     exit = fadeOut(),
                     modifier = Modifier.align(Alignment.CenterEnd),
                 ) {
-                    Sheet(ui, wide = true, onInteract = onInteract, actions = rememberSheetActions(vm))
+                    Sheet(ui, settings.alignMode, wide = true, onInteract = onInteract, actions = rememberSheetActions(vm))
                 }
             }
         }
@@ -339,6 +388,7 @@ private fun rememberSheetActions(vm: ScopeViewModel): SheetActions = remember(vm
         onRotate = vm::rotate,
         onToggleMirror = vm::toggleMirror,
         onToggleDenoise = vm::toggleDenoise,
+        onToggleAlign = vm::toggleAlign,
         onToggleStats = vm::toggleStats,
         onSettings = { vm.navigate(Screen.Settings) },
         onAbout = { vm.navigate(Screen.Trust) },
@@ -352,6 +402,7 @@ class SheetActions(
     val onRotate: () -> Unit,
     val onToggleMirror: () -> Unit,
     val onToggleDenoise: () -> Unit,
+    val onToggleAlign: () -> Unit,
     val onToggleStats: () -> Unit,
     val onSettings: () -> Unit,
     val onAbout: () -> Unit,
@@ -364,7 +415,7 @@ class SheetActions(
  * and their hand-drawn glyphs are no longer redrawn at the stream frame rate.
  */
 @Composable
-private fun Sheet(ui: UiState, wide: Boolean, onInteract: () -> Unit, actions: SheetActions) {
+private fun Sheet(ui: UiState, align: Boolean, wide: Boolean, onInteract: () -> Unit, actions: SheetActions) {
     ControlsSheet(
         // A live frame AND a live stream: after an unplug the last bitmap is dropped, and a stale
         // one must never leave Snapshot/Record enabled.
@@ -380,6 +431,8 @@ private fun Sheet(ui: UiState, wide: Boolean, onInteract: () -> Unit, actions: S
         onRotate = actions.onRotate,
         onToggleMirror = actions.onToggleMirror,
         onToggleDenoise = actions.onToggleDenoise,
+        align = align,
+        onToggleAlign = actions.onToggleAlign,
         onToggleStats = actions.onToggleStats,
         onSettings = actions.onSettings,
         onAbout = actions.onAbout,
@@ -422,4 +475,28 @@ private fun StatsOverlay(st: StreamStats) {
         style = MaterialTheme.typography.bodySmall,
         modifier = Modifier.background(Color(0x99000000)).padding(6.dp),
     )
+}
+
+
+/** Align-mode controls: uv frame size, position and opacity over the phone preview, plus Fit. */
+@Composable
+private fun AlignPanel(s: Settings, vm: ScopeViewModel, modifier: Modifier = Modifier) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.width(200.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            Text(stringResource(R.string.align_scale), style = MaterialTheme.typography.labelSmall)
+            Slider(value = s.alignW, onValueChange = { vm.setAlign(w = it) }, valueRange = 0.08f..1.5f)
+            Text(stringResource(R.string.align_x), style = MaterialTheme.typography.labelSmall)
+            Slider(value = s.alignX, onValueChange = { vm.setAlign(x = it) }, valueRange = -0.5f..1.5f)
+            Text(stringResource(R.string.align_y), style = MaterialTheme.typography.labelSmall)
+            Slider(value = s.alignY, onValueChange = { vm.setAlign(y = it) }, valueRange = -0.5f..1.5f)
+            Text(stringResource(R.string.align_alpha), style = MaterialTheme.typography.labelSmall)
+            Slider(value = s.alignAlpha, onValueChange = { vm.setAlign(alpha = it) }, valueRange = 0f..1f)
+            Button(onClick = { vm.fitAlign() }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.align_fit)) }
+        }
+    }
 }

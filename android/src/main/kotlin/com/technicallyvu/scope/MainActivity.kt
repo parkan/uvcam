@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
 
     private val visibleCamera by lazy { VisibleCamera(this) }
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) bindVisibleCamera() else vm.appSettingsPublic.update { it.copy(pairVisible = false, pairVisibleVideo = false) }
+        if (granted) bindVisibleCamera() else vm.appSettingsPublic.update { it.copy(pairVisible = false, pairVisibleVideo = false, alignMode = false) }
     }
 
     private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -92,7 +92,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         // the pair-visible setting owns the back camera: on -> ask once and bind, off -> release
         lifecycleScope.launch {
-            vm.appSettingsPublic.flow.map { it.pairVisible || it.pairVisibleVideo }.distinctUntilChanged().collect { on ->
+            vm.appSettingsPublic.flow.map { it.pairVisible || it.pairVisibleVideo || it.alignMode }.distinctUntilChanged().collect { on ->
                 when {
                     !on -> unbindVisibleCamera()
                     hasCameraPermission() -> bindVisibleCamera()
