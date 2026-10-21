@@ -101,6 +101,9 @@ class MainActivity : ComponentActivity() {
             }
         }
         lifecycleScope.launch {
+            vm.appSettingsPublic.flow.map { it.pairVideoFps }.distinctUntilChanged().collect { visibleCamera.setFrameRate(it) }
+        }
+        lifecycleScope.launch {
             vm.appSettingsPublic.flow.map { it.pairAudio }.distinctUntilChanged().collect { on ->
                 if (on && ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                     audioPermission.launch(Manifest.permission.RECORD_AUDIO)

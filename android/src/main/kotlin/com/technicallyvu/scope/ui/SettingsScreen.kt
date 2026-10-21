@@ -177,6 +177,12 @@ fun SettingsScreen(
             )
             HelperText(stringResource(R.string.settings_pair_visible_video_help))
             SwitchRow(
+                label = stringResource(R.string.settings_pair_video_60fps_label),
+                checked = settings.pairVideoFps == 60,
+                onCheckedChange = { onChange(settings.copy(pairVideoFps = if (it) 60 else 30)) },
+            )
+            HelperText(stringResource(R.string.settings_pair_video_60fps_help))
+            SwitchRow(
                 label = stringResource(R.string.settings_pair_audio_label),
                 checked = settings.pairAudio,
                 onCheckedChange = { onChange(settings.copy(pairAudio = it)) },

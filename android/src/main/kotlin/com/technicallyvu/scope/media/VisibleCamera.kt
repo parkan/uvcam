@@ -124,9 +124,8 @@ class VisibleCamera(private val context: Context, private val folder: String = c
             val rec = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(Quality.HD, FallbackStrategy.lowerQualityOrHigherThan(Quality.HD)))
                 .build()
-            // 60 fps halves the pairing uncertainty against the scope's frames; the camera offers
-            // a fixed 60 at 720p but may refuse it in combination with the still use case, in
-            // which case the device default (30) is taken and the sidecar says so
+            // the camera offers fixed 30 and 60 at 720p but may refuse 60 in combination with the
+            // still use case, in which case the device default (30) is taken and the sidecar says so
             lens = physicalId
             p.unbindAll()
             val cam = bindWithFallback(p, owner, ic, rec)
@@ -140,14 +139,24 @@ class VisibleCamera(private val context: Context, private val folder: String = c
     }
 
     private var lens: String? = null
+    @Volatile private var targetFps = 60
+    private var pendingRebind = false
+
+    /** 60 or 30. Takes effect at once when bound and idle, otherwise when the running clip finalizes. Main thread. */
+    fun setFrameRate(fps: Int) {
+        if (fps == targetFps) return
+        targetFps = fps
+        if (provider == null) return
+        if (recording == null) rebind() else pendingRebind = true
+    }
 
     /** Binds with a 60 fps video use case, or with the camera default when the surface set refuses it. Sets [videoCapture]. */
     private fun bindWithFallback(p: ProcessCameraProvider, owner: LifecycleOwner, ic: ImageCapture, rec: Recorder): androidx.camera.core.Camera {
-        var vc = buildVideoCapture(rec, lens, Range(60, 60))
+        var vc = buildVideoCapture(rec, lens, Range(targetFps, targetFps))
         val cam = try {
             bindAll(p, owner, ic, vc)
         } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "60 fps refused for this use case set, using the camera default", e)
+            Log.w(TAG, "$targetFps fps refused for this use case set, using the camera default", e)
             vc = buildVideoCapture(rec, lens, null)
             bindAll(p, owner, ic, vc)
         }
@@ -287,6 +296,7 @@ class VisibleCamera(private val context: Context, private val folder: String = c
                 is VideoRecordEvent.Start -> onStart(System.nanoTime())
                 is VideoRecordEvent.Finalize -> {
                     recording = null
+                    if (pendingRebind) { pendingRebind = false; rebind() }
                     // camerax keeps the file for most errors (e.g. ERROR_SOURCE_INACTIVE when the
                     // activity stops); an empty uri is the only real loss
                     val uri = ev.outputResults.outputUri.takeIf { it != android.net.Uri.EMPTY }

@@ -38,6 +38,8 @@ data class Settings(
     val alignAlpha: Float = 0.55f,
     /** Record the phone's microphone (3.5 mm jack when plugged) into the paired video. */
     val pairAudio: Boolean = false,
+    /** Phone clip frame rate, 60 or 30. 60 halves the pairing uncertainty; 30 allows twice the exposure in the dark. */
+    val pairVideoFps: Int = 60,
     val defaults: Map<String, DriverDefault> = emptyMap(),
 )
 
@@ -87,6 +89,7 @@ class AppSettings(private val prefs: SharedPreferences) {
             alignY = prefs.getFloat(KEY_ALIGN_Y, 0.5f),
             alignAlpha = prefs.getFloat(KEY_ALIGN_ALPHA, 0.55f),
             pairAudio = prefs.getBoolean(KEY_PAIR_AUDIO, false),
+            pairVideoFps = prefs.getInt(KEY_PAIR_VIDEO_FPS, 60),
             defaults = parseDefaults(prefs.getString(KEY_DEFAULTS, null)),
         ),
     )
@@ -110,6 +113,7 @@ class AppSettings(private val prefs: SharedPreferences) {
             .putFloat(KEY_ALIGN_Y, s.alignY)
             .putFloat(KEY_ALIGN_ALPHA, s.alignAlpha)
             .putBoolean(KEY_PAIR_AUDIO, s.pairAudio)
+            .putInt(KEY_PAIR_VIDEO_FPS, s.pairVideoFps)
             .putString(KEY_DEFAULTS, serializeDefaults(s.defaults))
             .apply()
     }
@@ -132,6 +136,7 @@ class AppSettings(private val prefs: SharedPreferences) {
         const val KEY_ALIGN_Y = "align_y"
         const val KEY_ALIGN_ALPHA = "align_alpha"
         const val KEY_PAIR_AUDIO = "pair_audio"
+        const val KEY_PAIR_VIDEO_FPS = "pair_video_fps"
         const val KEY_DEFAULTS = "driver_defaults"
 
         private const val ENTRY_SEPARATOR = ";"
@@ -155,6 +160,7 @@ class AppSettings(private val prefs: SharedPreferences) {
             denoiseStrength = clampStrength(s.denoiseStrength),
             sharpenStrength = clampSharpenStrength(s.sharpenStrength),
             doublePressWindowMs = clampWindow(s.doublePressWindowMs),
+            pairVideoFps = if (s.pairVideoFps == 30) 30 else 60,
             defaults = s.defaults.mapValues { (_, d) -> DriverDefault(clampRotation(d.rotation), d.mirror) },
         )
 
