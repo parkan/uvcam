@@ -80,4 +80,21 @@ class MediaStoreSaver(
         if (keep) resolver.update(video.uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
         else resolver.delete(video.uri, null, null)
     }
+
+    /**
+     * A text sidecar. Scoped storage only lets non-media files into Download/ and Documents/, so it
+     * lives in Documents/<folder>/ rather than next to the clip in Movies/.
+     */
+    fun createText(displayName: String, mime: String = "text/csv"): PendingVideo {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "Documents/$folder")
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val uri = resolver.insert(collection, values) ?: throw IOException(context.getString(R.string.error_media_create_failed))
+        val fd = resolver.openFileDescriptor(uri, "rw") ?: run { resolver.delete(uri, null, null); throw IOException(context.getString(R.string.error_media_open_failed)) }
+        return PendingVideo(uri, fd, displayName)
+    }
 }

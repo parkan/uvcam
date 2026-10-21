@@ -2,10 +2,12 @@ package com.technicallyvu.scope.media
 
 import android.content.ContentValues
 import android.content.Context
+import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.util.Log
+import android.util.Range
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import android.provider.MediaStore
@@ -44,7 +46,23 @@ class VisibleCamera(private val context: Context, private val folder: String = c
     private var provider: ProcessCameraProvider? = null
     private var capture: ImageCapture? = null
     private var recorder: Recorder? = null
-    private var recording: Recording? = null
+    @Volatile private var recording: Recording? = null
+    /** Gets (frameNumber, sensor timestamp ns, AE fps range) for every frame captured while a clip is recording. Camera thread. */
+    @Volatile var frameSink: ((Long, Long, Range<Int>?) -> Unit)? = null
+    /** "REALTIME" when sensor timestamps are CLOCK_BOOTTIME (comparable with SystemClock.elapsedRealtimeNanos), else "UNKNOWN". */
+    val sensorTimestampSource: String by lazy {
+        runCatching {
+            val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val back = cm.cameraIdList.first { cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK }
+            if (cm.getCameraCharacteristics(back).get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) "REALTIME" else "UNKNOWN"
+        }.getOrDefault("UNKNOWN")
+    }
+    private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureStarted(session: CameraCaptureSession, request: CaptureRequest, timestamp: Long, frameNumber: Long) {
+            if (recording == null) return
+            frameSink?.invoke(frameNumber, timestamp, request.get(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE))
+        }
+    }
     private var videoCapture: VideoCapture<Recorder>? = null
     private var control: CameraControl? = null
     private var owner: LifecycleOwner? = null
@@ -106,19 +124,48 @@ class VisibleCamera(private val context: Context, private val folder: String = c
             val rec = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(Quality.HD, FallbackStrategy.lowerQualityOrHigherThan(Quality.HD)))
                 .build()
-            val vcb = VideoCapture.Builder(rec).setTargetRotation(android.view.Surface.ROTATION_0).setVideoStabilizationEnabled(false)
-            lockGeometry(vcb, physicalId)
-            val vc = vcb.build()
+            // 60 fps halves the pairing uncertainty against the scope's frames; the camera offers
+            // a fixed 60 at 720p but may refuse it in combination with the still use case, in
+            // which case the device default (30) is taken and the sidecar says so
+            lens = physicalId
             p.unbindAll()
-            val cam = bindAll(p, owner, ic, vc)
+            val cam = bindWithFallback(p, owner, ic, rec)
             cam.cameraControl.setZoomRatio(1f)
             control = cam.cameraControl
             refocus(hold = true)
             provider = p
             capture = ic
             recorder = rec
-            videoCapture = vc
         }, ContextCompat.getMainExecutor(context))
+    }
+
+    private var lens: String? = null
+
+    /** Binds with a 60 fps video use case, or with the camera default when the surface set refuses it. Sets [videoCapture]. */
+    private fun bindWithFallback(p: ProcessCameraProvider, owner: LifecycleOwner, ic: ImageCapture, rec: Recorder): androidx.camera.core.Camera {
+        var vc = buildVideoCapture(rec, lens, Range(60, 60))
+        val cam = try {
+            bindAll(p, owner, ic, vc)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "60 fps refused for this use case set, using the camera default", e)
+            vc = buildVideoCapture(rec, lens, null)
+            bindAll(p, owner, ic, vc)
+        }
+        videoCapture = vc
+        return cam
+    }
+
+    private fun buildVideoCapture(rec: Recorder, physicalId: String?, fps: Range<Int>?): VideoCapture<Recorder> {
+        val vcb = VideoCapture.Builder(rec).setTargetRotation(android.view.Surface.ROTATION_0).setVideoStabilizationEnabled(false)
+        lockGeometry(vcb, physicalId)
+        val ext = Camera2Interop.Extender(vcb)
+        // setTargetFrameRate alone resolves to 30 here: the full-size JPEG stream's minimum frame
+        // duration caps what camerax considers achievable for the session, although the repeating
+        // request never includes that stream. the ae range on the request itself is what the HAL
+        // honours, so set it directly as well; the sidecar records what was in force
+        if (fps != null) { vcb.setTargetFrameRate(fps); ext.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps) }
+        ext.setSessionCaptureCallback(captureCallback)
+        return vcb.build()
     }
 
     /** Binds the still and video use cases plus the align-mode preview when one is attached. */
@@ -150,10 +197,10 @@ class VisibleCamera(private val context: Context, private val folder: String = c
         val p = provider ?: return
         val o = owner ?: return
         val ic = capture ?: return
-        val vc = videoCapture ?: return
+        val rec = recorder ?: return
         if (recording != null) return
         p.unbindAll()
-        val cam = bindAll(p, o, ic, vc)
+        val cam = bindWithFallback(p, o, ic, rec)
         cam.cameraControl.setZoomRatio(1f)
         control = cam.cameraControl
         refocus(hold = true)

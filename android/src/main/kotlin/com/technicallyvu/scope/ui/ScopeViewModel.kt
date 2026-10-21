@@ -29,6 +29,7 @@ import com.technicallyvu.scope.core.usb.UsbDeviceInfo
 import com.technicallyvu.scope.core.usb.UsbInterfaceInfo
 import com.technicallyvu.scope.media.FrameBitmaps
 import com.technicallyvu.scope.media.MediaStoreSaver
+import com.technicallyvu.scope.media.PairLog
 import com.technicallyvu.scope.media.SurfaceRecorder
 import com.technicallyvu.scope.settings.AppSettings
 import com.technicallyvu.scope.settings.DriverDefault
@@ -207,6 +208,9 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
     // recording?" from the main thread without taking the lock.
     @Volatile private var recorder: SurfaceRecorder? = null
     @Volatile private var pendingVideo: MediaStoreSaver.PendingVideo? = null
+    /** Timing sidecar of the running clip; rows come from the scope worker and the phone camera thread. */
+    @Volatile private var pairLog: PairLog? = null
+    private var pendingLog: MediaStoreSaver.PendingVideo? = null
     private var recorderGeneration = 0L
     /** Guards against a second replay start/stop while the previous session is still winding down. */
     private var switchingSession = false
@@ -288,6 +292,7 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         override fun onFrame(frame: Frame, state: SessionState) {
             if (token != currentSessionToken) return
             val t0 = System.nanoTime()
+            val arrivedBootNs = android.os.SystemClock.elapsedRealtimeNanos()
             lastFrame = frame.data
             val jpeg = frame.data is FrameData.Jpeg
             val denoiser = if (state.denoise && jpeg) argbDenoiser else null
@@ -299,7 +304,10 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
             // files are written in the scope's native frame: rotate/mirror only affect what is shown,
             // so every recording and snapshot shares one fixed geometry for registration in post
             synchronized(recorderLock) {
-                recorder?.let { rec -> runCatching { rec.record(bmp) }.onFailure { stopRecordingLocked(keep = true) } }
+                recorder?.let { rec ->
+                    pairLog?.row("uv", rec.framesWritten.toLong(), arrivedBootNs, frame.timestampNanos.toString())
+                    runCatching { rec.record(bmp) }.onFailure { stopRecordingLocked(keep = true) }
+                }
             }
             _ui.update { it.copy(image = shown) }
             if (BuildConfig.DEBUG && _logFrameTiming.value) logTiming(t0, state)
@@ -624,12 +632,21 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
                 val name = "SCOPE_" + LocalDateTime.now().format(STAMP) + ".mp4"
                 val video = runCatching { saver.createVideo(name) }.getOrElse { e -> message(R.string.error_recording_start_failed_format, e.message.orEmpty()); return@launch }
                 val (rawW, rawH) = lastRawSize
+                // the sidecar is best effort: a clip without timing rows is still a clip
+                val logFile = runCatching { saver.createText(name.removeSuffix(".mp4") + "_pairlog.csv") }.onFailure { Log.w(SENTRY_TAG, "pairlog create failed", it) }.getOrNull()
                 val created = runCatching { SurfaceRecorder(getApplication(), video.fd, rawW, rawH) }
-                    .getOrElse { e -> saver.finishVideo(video, keep = false); message(R.string.error_recording_start_failed_format, e.message.orEmpty()); return@launch }
+                    .getOrElse { e -> saver.finishVideo(video, keep = false); logFile?.let { saver.finishVideo(it, keep = false) }; message(R.string.error_recording_start_failed_format, e.message.orEmpty()); return@launch }
                 synchronized(recorderLock) {
-                    if (recorder != null || recorderGeneration != generation) { runCatching { created.close() }; saver.finishVideo(video, keep = false); return@launch }
+                    if (recorder != null || recorderGeneration != generation) { runCatching { created.close() }; saver.finishVideo(video, keep = false); logFile?.let { saver.finishVideo(it, keep = false) }; return@launch }
                     recorder = created
                     pendingVideo = video
+                    pendingLog = logFile
+                    pairLog = logFile?.let { lf ->
+                        val pairs = appSettings.flow.value.pairVisibleVideo && visibleCamera?.isBound == true
+                        runCatching { PairLog(lf.fd, name, if (pairs) name.removeSuffix(".mp4") + "_vis.mp4" else null, visibleCamera?.sensorTimestampSource ?: "UNKNOWN") }
+                            .onFailure { Log.w(SENTRY_TAG, "pairlog open failed", it) }.getOrNull()
+                    }
+                    pairLog?.mark("uv_start")
                     // Published while still holding recorderLock so the per-frame state collector
                     // can never observe recorder != null with recording still false and auto-stop
                     // the recording that was just started.
@@ -673,6 +690,10 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
             })
         }
         visibleCamera?.stopRecording()
+        pairLog?.let { it.mark("uv_stop"); it.close() }
+        pairLog = null
+        pendingLog?.let { lf -> saver.finishVideo(lf, keep = video != null && keep && rec.framesWritten > 0 && !rec.stopFailed) }
+        pendingLog = null
         if (fromButton) message(R.string.status_recording_stopped)
     }
 
@@ -685,6 +706,7 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
         val vis = visibleCamera ?: return
         if (!appSettings.flow.value.pairVisibleVideo || !vis.isBound) return
         val base = scopeName.removeSuffix(".mp4") + "_vis"
+        vis.frameSink = { n, ts, fps -> pairLog?.visFrame(n, ts, fps) }
         viewModelScope.launch(Dispatchers.Main) { attemptPairedVideo(vis, base, scopeStartNanos, retry = true) }
     }
 
@@ -702,7 +724,7 @@ class ScopeViewModel(app: Application, private val appSettings: AppSettings) : A
             vis.startRecording(
                 displayName = "$base.mp4",
                 withAudio = appSettings.flow.value.pairAudio,
-                onStart = { t -> started = true; offsetMs = (t - scopeStartNanos) / 1_000_000 },
+                onStart = { t -> started = true; offsetMs = (t - scopeStartNanos) / 1_000_000; pairLog?.mark("vis_start", "offset_ms $offsetMs retry ${!retry}") },
                 onFinalize = { uri, err ->
                     // a clip cut short (source inactive, storage) is still a clip: keep the
                     // offset in its name and say what happened

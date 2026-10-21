@@ -14,8 +14,8 @@ android {
         applicationId = "id.corvid.uvcam"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.1"
+        versionCode = 4
+        versionName = "0.4.2"
         buildConfigField("String", "GIT_SHA", "\"${gitShortSha()}\"")
     }
 
